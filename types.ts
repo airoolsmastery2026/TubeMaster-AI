@@ -25,6 +25,9 @@ export interface ChannelProfile {
   // Settings riêng cho kênh
   autoUploadDelay: number; // Giây
   defaultTone: string;
+  
+  // Encryption flag
+  isEncrypted?: boolean;
 }
 
 export interface SystemState {
@@ -69,7 +72,7 @@ export interface SavedScript {
   lastModified: string;
 }
 
-export type RowStatus = 'PENDING' | 'PROCESSING' | 'OPTIMIZED' | 'UPLOADING' | 'PUBLISHED' | 'ERROR';
+export type RowStatus = 'PENDING' | 'PROCESSING' | 'OPTIMIZED' | 'SCRIPT_READY' | 'UPLOADING' | 'PUBLISHED' | 'ERROR';
 
 export interface SheetRow {
   id: string;
@@ -82,6 +85,7 @@ export interface SheetRow {
   publishDate?: string;
   logs?: string;
   seoScore?: number;
+  linkedScriptId?: string; // ID của script trong thư viện
 }
 
 export interface AuditResult {
@@ -104,5 +108,6 @@ export const NEW_PROFILE_TEMPLATE: ChannelProfile = {
   sheetId: '',
   geminiApiKey: '',
   autoUploadDelay: 10,
-  defaultTone: 'Hài hước & Năng động'
+  defaultTone: 'Hài hước & Năng động',
+  isEncrypted: false
 };

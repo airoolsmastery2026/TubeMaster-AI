@@ -37,15 +37,21 @@ const handleGeminiError = (error: any): never => {
   throw new Error(`Lỗi hệ thống: ${message || "Không xác định"}.`);
 };
 
-export const generateVideoContent = async (apiKey: string, topic: string, tone: string, type: 'LONG' | 'SHORT' = 'LONG'): Promise<GeneratedContent> => {
+export const generateVideoContent = async (apiKey: string, topic: string, tone: string, type: 'LONG' | 'SHORT' = 'LONG', relatedVideoId?: string): Promise<GeneratedContent> => {
   
   let prompt = "";
   
+  const refContext = relatedVideoId 
+    ? `\nTHAM KHẢO VIDEO NGUỒN: YouTube Video ID "${relatedVideoId}". 
+       Hãy phân tích ngữ cảnh tiềm năng của video này. Nội dung tạo ra phải là một phiên bản "Remix", "Reaction", hoặc "Nâng cấp" dựa trên chủ đề gốc nhưng hay hơn.` 
+    : "";
+
   if (type === 'SHORT') {
     prompt = `
       Bạn là chuyên gia TikTok/YouTube Shorts.
       Nhiệm vụ: Viết kịch bản video ngắn (dưới 60s) cho chủ đề: "${topic}".
       Phong cách: ${tone}.
+      ${refContext}
       
       Yêu cầu:
       1. Tiêu đề cực ngắn, gây sốc hoặc tò mò.
@@ -68,6 +74,7 @@ export const generateVideoContent = async (apiKey: string, topic: string, tone: 
       Bạn là chuyên gia tối ưu hóa YouTube (như VidIQ/TubeBuddy).
       Nhiệm vụ: Tạo nội dung video dài (Long-form) cho chủ đề: "${topic}".
       Phong cách: ${tone}.
+      ${refContext}
       
       Yêu cầu đặc biệt:
       1. Tiêu đề phải có tính clickbait cao nhưng không lừa đảo, chứa từ khóa SEO.

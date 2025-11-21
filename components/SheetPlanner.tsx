@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { SheetRow, ChannelProfile, LogEntry, RowStatus, AppView } from '../types';
 import { optimizeSheetRow } from '../services/geminiService';
-import { Play, Pause, RefreshCw, CloudUpload, Clock, Terminal, Youtube, Check, Loader, AlertTriangle, Hash, FileUp, Download, FileSpreadsheet, Trash2, PenTool } from 'lucide-react';
+import { Play, Pause, RefreshCw, CloudUpload, Clock, Terminal, Youtube, Check, Loader, AlertTriangle, Hash, FileUp, Download, FileSpreadsheet, Trash2, PenTool, CheckCircle2, Video } from 'lucide-react';
 
 interface SheetPlannerProps {
   activeProfile?: ChannelProfile;
@@ -35,6 +35,23 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
   }, [logs]);
 
   // --- DATA PERSISTENCE & INIT ---
+  const loadRowsFromStorage = () => {
+      if (activeProfile) {
+        const storageKey = `tm_sheet_${activeProfile.id}`;
+        const savedRowsData = localStorage.getItem(storageKey);
+        if (savedRowsData) {
+            try {
+                const parsedRows = JSON.parse(savedRowsData);
+                // Chỉ update nếu có sự thay đổi số lượng hoặc deep check (ở đây check đơn giản length hoặc status change)
+                // Để đơn giản: Update luôn vì React sẽ diff
+                setRows(parsedRows);
+            } catch (e) {
+                console.error("Failed to load saved rows", e);
+            }
+        }
+      }
+  };
+
   // 1. Load data when profile changes
   useEffect(() => {
     setIsAutoRunning(false);
@@ -43,37 +60,28 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
     if (activeProfile) {
         addLog(`Initialized environment for profile: ${activeProfile.name}`, 'INFO');
         setUploadDelay(activeProfile.autoUploadDelay || 10);
-        
-        // Load Rows from Storage
-        const storageKey = `tm_sheet_${activeProfile.id}`;
-        const savedRowsData = localStorage.getItem(storageKey);
-        
-        if (savedRowsData) {
-            try {
-                const parsedRows = JSON.parse(savedRowsData);
-                setRows(parsedRows);
-                if (parsedRows.length > 0) {
-                    addLog(`Restored ${parsedRows.length} pending jobs from previous session.`, 'SUCCESS');
-                }
-            } catch (e) {
-                console.error("Failed to load saved rows", e);
-                setRows([]);
-            }
-        } else {
-            setRows([]);
-        }
-
-        if (!activeProfile.sheetId) {
-             addLog("MODE: Local File System (No Google Sheet linked)", 'WARNING');
-        } else {
-             addLog(`Connected to Google Sheets [${activeProfile.sheetId.substring(0, 6)}...]`, 'SUCCESS');
-        }
+        loadRowsFromStorage();
+        addLog(`Connected to Internal Database (Simulating Sheet: ${activeProfile.sheetId.substring(0, 6)}...)`, 'SUCCESS');
     }
   }, [activeProfile?.id]);
 
-  // 2. Auto-save rows whenever they change
+  // 2. Auto-reload when tab becomes active (để nhận update từ ContentGenerator)
   useEffect(() => {
-      if (activeProfile?.id) {
+      const handleFocus = () => {
+          loadRowsFromStorage();
+      };
+      window.addEventListener('focus', handleFocus);
+      // Cũng gọi load mỗi 2s nếu không chạy auto để catch update từ tab khác nếu có
+      const interval = setInterval(loadRowsFromStorage, 2000);
+      return () => {
+          window.removeEventListener('focus', handleFocus);
+          clearInterval(interval);
+      };
+  }, [activeProfile?.id]);
+
+  // 3. Auto-save rows whenever they change locally
+  useEffect(() => {
+      if (activeProfile?.id && rows.length > 0) {
           const storageKey = `tm_sheet_${activeProfile.id}`;
           localStorage.setItem(storageKey, JSON.stringify(rows));
       }
@@ -93,7 +101,6 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
         try {
             const parsedRows = parseCSV(text);
             if (parsedRows.length > 0) {
-                // Merge with existing or replace? Let's append for now
                 setRows(prev => [...prev, ...parsedRows]);
                 addLog(`Successfully imported ${parsedRows.length} rows from CSV.`, 'SUCCESS');
             } else {
@@ -143,7 +150,7 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
         addLog("Nothing to export.", 'WARNING');
         return;
     }
-    let csvContent = "ID,Original Topic,Status,Optimized Title,Optimized Description,Keywords,SEO Score,Video ID\n";
+    let csvContent = "ID,Topic,Status,Optimized Title,Script Status,Video ID\n";
     rows.forEach(row => {
         const clean = (text?: string) => `"${(text || '').replace(/"/g, '""')}"`;
         const line = [
@@ -151,9 +158,7 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
             clean(row.topic),
             row.status,
             clean(row.optimizedTitle),
-            clean(row.optimizedDesc),
-            clean(row.keywords),
-            row.seoScore || 0,
+            row.linkedScriptId ? 'Has Script' : 'No Script',
             row.videoId || ''
         ].join(",");
         csvContent += line + "\n";
@@ -196,42 +201,49 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
     }
 
     const currentRow = rows.find(r => r.id === rowId);
-    if (!currentRow || (currentRow.status !== 'PENDING' && currentRow.status !== 'ERROR')) return;
+    if (!currentRow) return;
 
-    addLog(`>>> START JOB [${rowId}]`, 'INFO');
-    updateRowStatus(rowId, 'PROCESSING');
+    // STATE 1: PENDING -> OPTIMIZED
+    if (currentRow.status === 'PENDING' || currentRow.status === 'ERROR') {
+        addLog(`>>> START JOB [${rowId}]`, 'INFO');
+        updateRowStatus(rowId, 'PROCESSING');
 
-    try {
-      addLog(`[${rowId}] Analyzing topic & keywords...`, 'INFO');
-      const optimizedRow = await optimizeSheetRow(activeProfile.geminiApiKey, currentRow);
-      
-      setRows(prev => prev.map(r => r.id === rowId ? { ...optimizedRow, status: 'OPTIMIZED' } : r));
-      addLog(`[${rowId}] Optimization Complete. SEO Score: ${optimizedRow.seoScore}`, 'SUCCESS');
+        try {
+            addLog(`[${rowId}] Analyzing topic & keywords...`, 'INFO');
+            const optimizedRow = await optimizeSheetRow(activeProfile.geminiApiKey, currentRow);
+            
+            setRows(prev => prev.map(r => r.id === rowId ? { ...optimizedRow, status: 'OPTIMIZED' } : r));
+            addLog(`[${rowId}] Optimization Complete. SEO Score: ${optimizedRow.seoScore}`, 'SUCCESS');
 
-      if (!enableAutoUpload) {
-        addLog(`[${rowId}] Auto-upload disabled. Job finished.`, 'WARNING');
+        } catch (error: any) {
+            addLog(`[${rowId}] FAILED: ${error.message}`, 'ERROR');
+            updateRowStatus(rowId, 'ERROR', undefined, error.message);
+        }
         return;
-      }
+    }
 
-      if (isAutoRunning) {
-          addLog(`[${rowId}] Cooldown ${uploadDelay}s before upload...`, 'INFO');
-          await new Promise(resolve => setTimeout(resolve, uploadDelay * 1000));
-      } else {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+    // STATE 2: SCRIPT_READY -> UPLOADING (Requires Auto Upload ON)
+    if (currentRow.status === 'SCRIPT_READY') {
+         if (!enableAutoUpload) {
+            addLog(`[${rowId}] Script ready but Auto-upload disabled. Skipping.`, 'WARNING');
+            return;
+         }
+         
+         if (isAutoRunning) {
+             addLog(`[${rowId}] Cooldown ${uploadDelay}s before upload...`, 'INFO');
+             await new Promise(resolve => setTimeout(resolve, uploadDelay * 1000));
+         }
 
-      addLog(`[${rowId}] Pushing to YouTube API...`, 'INFO');
-      updateRowStatus(rowId, 'UPLOADING');
-      
-      await new Promise(resolve => setTimeout(resolve, 1500)); 
-      
-      const mockVideoId = `v${Date.now().toString().substring(8)}`;
-      updateRowStatus(rowId, 'PUBLISHED', mockVideoId);
-      addLog(`[${rowId}] PUBLISH SUCCESS. Video ID: ${mockVideoId}`, 'SUCCESS');
-
-    } catch (error: any) {
-      addLog(`[${rowId}] FAILED: ${error.message}`, 'ERROR');
-      updateRowStatus(rowId, 'ERROR', undefined, error.message);
+         addLog(`[${rowId}] Pushing to YouTube API (Simulated)...`, 'INFO');
+         updateRowStatus(rowId, 'UPLOADING');
+         
+         // Simulate Upload Time
+         await new Promise(resolve => setTimeout(resolve, 2000)); 
+         
+         const mockVideoId = `v${Date.now().toString().substring(8)}`;
+         updateRowStatus(rowId, 'PUBLISHED', mockVideoId);
+         addLog(`[${rowId}] PUBLISH SUCCESS. Video ID: ${mockVideoId}`, 'SUCCESS');
+         return;
     }
   };
 
@@ -243,6 +255,7 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
     ));
   };
 
+  // AUTO RUNNER LOOP
   useEffect(() => {
     if (!isAutoRunning) {
       if (autoIntervalRef.current) {
@@ -259,12 +272,19 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
         const isBusy = currentRows.some(r => r.status === 'PROCESSING' || r.status === 'UPLOADING');
         
         if (!isBusy) {
-          const nextRow = currentRows.find(r => r.status === 'PENDING');
+          // Find next eligible row
+          // Priority 1: Pending rows
+          let nextRow = currentRows.find(r => r.status === 'PENDING');
+          
+          // Priority 2: Ready scripts (only if auto upload is on)
+          if (!nextRow && enableAutoUpload) {
+              nextRow = currentRows.find(r => r.status === 'SCRIPT_READY');
+          }
+
           if (nextRow) {
             setTimeout(() => processSingleRow(nextRow.id), 0);
           } else {
-            setIsAutoRunning(false);
-            addLog(">>> QUEUE EMPTY. AUTO-PILOT DISENGAGED.", 'SUCCESS');
+             // Nothing to do
           }
         }
         return currentRows;
@@ -282,13 +302,14 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
       'PENDING': 'bg-slate-100 text-slate-500 border-slate-200',
       'PROCESSING': 'bg-blue-50 text-blue-600 border-blue-200 animate-pulse',
       'OPTIMIZED': 'bg-purple-50 text-purple-600 border-purple-200',
+      'SCRIPT_READY': 'bg-pink-50 text-pink-600 border-pink-200 font-bold',
       'UPLOADING': 'bg-orange-50 text-orange-600 border-orange-200 animate-pulse',
       'PUBLISHED': 'bg-green-50 text-green-600 border-green-200',
       'ERROR': 'bg-red-50 text-red-600 border-red-200',
     };
     return (
       <span className={`px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wide border ${styles[status] || styles.PENDING}`}>
-        {status}
+        {status.replace('_', ' ')}
       </span>
     );
   };
@@ -388,9 +409,9 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
                 <tr>
                     <th className="p-4 w-16 text-center text-slate-400">#</th>
                     <th className="p-4 w-1/3">Topic Source</th>
-                    <th className="p-4">AI Optimization</th>
-                    <th className="p-4 w-32 text-center">Status</th>
-                    <th className="p-4 w-24 text-center">Cmd</th>
+                    <th className="p-4">Content Status</th>
+                    <th className="p-4 w-32 text-center">Workflow</th>
+                    <th className="p-4 w-24 text-center">Action</th>
                 </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
@@ -404,22 +425,25 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
                     <td className="p-4">
                         {row.optimizedTitle ? (
                         <div className="space-y-1.5 animate-fade-in">
-                            <div className="text-indigo-700 font-bold text-xs leading-normal">{row.optimizedTitle}</div>
+                            <div className="text-indigo-700 font-bold text-xs leading-normal flex items-center gap-2">
+                                {row.linkedScriptId && <Video className="w-3 h-3 text-pink-500" />}
+                                {row.optimizedTitle}
+                            </div>
                             <div className="flex gap-2 items-center">
                             <span className={`text-[10px] px-1.5 rounded border ${row.seoScore && row.seoScore > 80 ? 'bg-green-50 text-green-600 border-green-100' : 'bg-yellow-50 text-yellow-600 border-yellow-100'}`}>
                                 SEO: {row.seoScore}
                             </span>
-                            <div className="flex gap-1 overflow-hidden">
-                                {row.keywords?.split(',').slice(0,2).map((k,i) => (
-                                <span key={i} className="text-[10px] text-slate-400 flex items-center"><Hash className="w-2 h-2"/>{k.trim()}</span>
-                                ))}
-                            </div>
+                            {row.linkedScriptId && (
+                                <span className="text-[10px] px-1.5 rounded border bg-pink-50 text-pink-600 border-pink-100 flex items-center gap-1">
+                                    <CheckCircle2 className="w-2 h-2"/> Script Ready
+                                </span>
+                            )}
                             </div>
                         </div>
                         ) : (
                             <div className="flex items-center gap-2 text-slate-300 text-xs italic">
                                 <Loader className={`w-3 h-3 ${row.status === 'PROCESSING' ? 'animate-spin text-indigo-400' : ''}`} />
-                                {row.status === 'PROCESSING' ? 'AI Thinking...' : 'Waiting...'}
+                                {row.status === 'PROCESSING' ? 'AI Thinking...' : 'No Optimization'}
                             </div>
                         )}
                     </td>
@@ -428,15 +452,20 @@ const SheetPlanner: React.FC<SheetPlannerProps> = ({ activeProfile, onNavigate }
                     </td>
                     <td className="p-4 text-center flex justify-center gap-1">
                         {row.status === 'PENDING' && !isAutoRunning && (
-                        <button onClick={() => processSingleRow(row.id)} className="p-1.5 hover:bg-indigo-50 text-indigo-600 rounded transition" title="Optimize AI">
+                        <button onClick={() => processSingleRow(row.id)} className="p-1.5 hover:bg-indigo-50 text-indigo-600 rounded transition" title="Optimize Metadata">
                             <Play className="w-4 h-4" />
                         </button>
                         )}
-                         <button onClick={() => onNavigate(AppView.GENERATOR, { topic: row.topic })} className="p-1.5 hover:bg-purple-50 text-purple-600 rounded transition" title="Write Script">
+                        {/* NÚT VIẾT KỊCH BẢN CÓ TRUYỀN LINKED ID */}
+                         <button 
+                            onClick={() => onNavigate(AppView.GENERATOR, { topic: row.topic, linkedRowId: row.id })} 
+                            className={`p-1.5 rounded transition ${row.linkedScriptId ? 'bg-pink-50 text-pink-600' : 'hover:bg-purple-50 text-purple-600'}`} 
+                            title={row.linkedScriptId ? "Edit Script" : "Write Script"}
+                         >
                             <PenTool className="w-4 h-4" />
                         </button>
                         {row.videoId && (
-                            <a href="#" className="flex justify-center text-red-600 hover:text-red-700"><Youtube className="w-5 h-5"/></a>
+                            <a href="#" className="flex justify-center text-red-600 hover:text-red-700" title="Watch Video"><Youtube className="w-5 h-5"/></a>
                         )}
                     </td>
                     </tr>

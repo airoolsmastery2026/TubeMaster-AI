@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { GeneratedContent, ChannelProfile, SavedScript, SheetRow } from '../types';
 import { generateVideoContent, generateOptimizedDescription, generateThumbnailIdeas, generateThumbnailImage, generateSocialPosts, getTrendingIdeas } from '../services/geminiService';
-import { Sparkles, Copy, Loader2, Video, FileText, Tag, Download, AlertCircle, RefreshCw, Wand2, Plus, Save, Trash2, Clock, Edit3, LayoutTemplate, Database, ArrowRight, Image as ImageIcon, Palette, Share2, Facebook, Linkedin, Twitter, Check, Search, ExternalLink } from 'lucide-react';
+import { Sparkles, Copy, Loader2, Video, FileText, Tag, Download, AlertCircle, RefreshCw, Wand2, Plus, Save, Trash2, Clock, Edit3, LayoutTemplate, Database, ArrowRight, Image as ImageIcon, Palette, Share2, Facebook, Linkedin, Twitter, Check, Search, ExternalLink, RefreshCcw, Youtube, Link } from 'lucide-react';
 
 interface ContentGeneratorProps {
   activeProfile?: ChannelProfile;
@@ -12,6 +12,7 @@ interface ContentGeneratorProps {
 const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, initialParams }) => {
   // --- INPUT STATE ---
   const [topic, setTopic] = useState('');
+  const [refVideoUrl, setRefVideoUrl] = useState(''); // New: Youtube URL input
   const [tone, setTone] = useState(activeProfile?.defaultTone || 'Hài hước & Năng động');
   const [videoType, setVideoType] = useState<'LONG' | 'SHORT'>('LONG');
   
@@ -20,10 +21,12 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [pushStatus, setPushStatus] = useState<'IDLE' | 'PUSHING' | 'SUCCESS'>('IDLE');
+  const [linkedRowId, setLinkedRowId] = useState<string | null>(null); // ID của dòng bên SheetPlanner
 
   // --- THUMBNAIL STATE ---
   const [editorTab, setEditorTab] = useState<'SCRIPT' | 'THUMBNAIL' | 'PROMOTION'>('SCRIPT');
   const [thumbPrompts, setThumbPrompts] = useState<string[]>([]);
+  const [selectedPromptIndex, setSelectedPromptIndex] = useState<number | null>(null);
   const [activeThumbPrompt, setActiveThumbPrompt] = useState('');
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
@@ -53,19 +56,23 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
           const data = localStorage.getItem('tm_saved_scripts');
           if (data) {
               const parsed = JSON.parse(data);
-              // Filter scripts relevant to current profile if needed, currently showing all for demo
               setSavedScripts(parsed);
           }
       };
       loadHistory();
   }, []);
 
-  // Xử lý dữ liệu được truyền từ trang khác (VD: Từ Audit)
+  // Xử lý dữ liệu được truyền từ trang khác (VD: Từ Audit hoặc Planner)
   useEffect(() => {
-      if (initialParams && initialParams.topic) {
-          setTopic(initialParams.topic);
-          setActiveScript(null); // Reset về mode tạo mới
-          setError(null);
+      if (initialParams) {
+          if (initialParams.topic) {
+              setTopic(initialParams.topic);
+              setActiveScript(null); 
+              setError(null);
+          }
+          if (initialParams.linkedRowId) {
+              setLinkedRowId(initialParams.linkedRowId);
+          }
       }
   }, [initialParams]);
 
@@ -75,15 +82,25 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
           setActiveThumbPrompt(activeScript.thumbnailPrompt || '');
           setGeneratedImage(null); 
           setThumbPrompts([]);
+          setSelectedPromptIndex(null);
           setSocialPosts(activeScript.socialPosts || {});
           setEditorTab('SCRIPT');
           setShowTrends(false);
+          setRefVideoUrl(''); // Reset url input
       }
   }, [activeScript?.id]);
 
   const saveHistoryToStorage = (scripts: SavedScript[]) => {
       setSavedScripts(scripts);
       localStorage.setItem('tm_saved_scripts', JSON.stringify(scripts));
+  };
+
+  // Helper to extract ID from URL
+  const getYoutubeId = (url: string) => {
+    if (!url) return null;
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : null;
   };
 
   const handleGenerate = async () => {
@@ -96,8 +113,17 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
     setIsLoading(true);
     setError(null);
     
+    // Check URL
+    const videoId = getYoutubeId(refVideoUrl);
+    
     try {
-      const data = await generateVideoContent(activeProfile.geminiApiKey, topic, tone, videoType);
+      const data = await generateVideoContent(
+          activeProfile.geminiApiKey, 
+          topic, 
+          tone, 
+          videoType,
+          videoId || undefined // Pass ID if exists
+      );
       
       // Convert GeneratedContent to SavedScript format for editing
       const newScript: SavedScript = {
@@ -144,54 +170,92 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
       saveHistoryToStorage(updatedList);
 
       setTimeout(() => setIsSaving(false), 500);
+      return updatedScript;
   };
 
-  // --- FEATURE MỚI: ĐẨY SANG PLANNER ---
+  // --- TÍNH NĂNG: ĐẨY/CẬP NHẬT SANG PLANNER ---
   const handlePushToPlanner = () => {
       if (!activeScript || !activeProfile) return;
       
+      // Lưu script trước khi đẩy
+      const currentScript = handleSaveCurrentWork();
+      if (!currentScript) return;
+
       setPushStatus('PUSHING');
 
       try {
-          // 1. Lấy dữ liệu Planner hiện tại của Profile này
           const storageKey = `tm_sheet_${activeProfile.id}`;
           const existingDataStr = localStorage.getItem(storageKey);
           let existingRows: SheetRow[] = existingDataStr ? JSON.parse(existingDataStr) : [];
 
-          // 2. Tạo row mới từ Script đã viết
-          const newRow: SheetRow = {
-              id: `gen-${Date.now()}`,
-              topic: activeScript.topic,
-              status: 'OPTIMIZED', // Đã có content nên coi như đã Optimized
-              optimizedTitle: activeScript.title,
-              optimizedDesc: activeScript.description,
-              keywords: activeScript.tags.join(', '),
-              seoScore: 90, // Giả định cao vì do AI viết
-              logs: 'Imported from Content Studio'
-          };
+          if (linkedRowId) {
+              // TRƯỜNG HỢP 1: UPDATE DÒNG CÓ SẴN (Từ Planner bấm sang)
+              const rowIndex = existingRows.findIndex(r => r.id === linkedRowId);
+              if (rowIndex !== -1) {
+                  existingRows[rowIndex] = {
+                      ...existingRows[rowIndex],
+                      status: 'SCRIPT_READY', // Update status
+                      optimizedTitle: currentScript.title,
+                      optimizedDesc: currentScript.description,
+                      keywords: currentScript.tags.join(', '),
+                      seoScore: 95,
+                      linkedScriptId: currentScript.id,
+                      logs: `Updated content from Studio at ${new Date().toLocaleTimeString()}`
+                  };
+              } else {
+                  // Fallback nếu không tìm thấy ID (do bị xóa?)
+                  // Tạo mới
+                  const newRow: SheetRow = {
+                    id: `gen-${Date.now()}`,
+                    topic: currentScript.topic,
+                    status: 'SCRIPT_READY',
+                    optimizedTitle: currentScript.title,
+                    optimizedDesc: currentScript.description,
+                    keywords: currentScript.tags.join(', '),
+                    seoScore: 95,
+                    linkedScriptId: currentScript.id,
+                    logs: 'Re-created from Studio'
+                };
+                existingRows.push(newRow);
+              }
+          } else {
+              // TRƯỜNG HỢP 2: TẠO MỚI HOÀN TOÀN (Từ nút New Project)
+              const newRow: SheetRow = {
+                  id: `gen-${Date.now()}`,
+                  topic: currentScript.topic,
+                  status: 'SCRIPT_READY',
+                  optimizedTitle: currentScript.title,
+                  optimizedDesc: currentScript.description,
+                  keywords: currentScript.tags.join(', '),
+                  seoScore: 95,
+                  linkedScriptId: currentScript.id,
+                  logs: 'Created from Studio'
+              };
+              existingRows.push(newRow);
+          }
 
-          // 3. Lưu ngược lại vào Storage
-          const updatedRows = [...existingRows, newRow];
-          localStorage.setItem(storageKey, JSON.stringify(updatedRows));
+          // Lưu ngược lại vào Storage
+          localStorage.setItem(storageKey, JSON.stringify(existingRows));
 
           setTimeout(() => {
               setPushStatus('SUCCESS');
-              // Reset status sau 3s
               setTimeout(() => setPushStatus('IDLE'), 3000);
           }, 800);
 
       } catch (e) {
           console.error(e);
           setPushStatus('IDLE');
-          alert("Lỗi khi đẩy sang Planner");
+          alert("Lỗi khi đồng bộ với Planner");
       }
   };
 
   const handleNewProject = () => {
       setActiveScript(null);
       setTopic('');
+      setRefVideoUrl('');
       setError(null);
       setPushStatus('IDLE');
+      setLinkedRowId(null); // Reset link
   };
 
   const handleDeleteScript = (id: string, e: React.MouseEvent) => {
@@ -229,8 +293,9 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
         // Pass the selected style to the service
         const ideas = await generateThumbnailIdeas(activeProfile.geminiApiKey, activeScript.title, activeScript.content, thumbnailStyle);
         setThumbPrompts(ideas);
-        if (ideas.length > 0 && !activeThumbPrompt) {
+        if (ideas.length > 0) {
             setActiveThumbPrompt(ideas[0]);
+            setSelectedPromptIndex(0);
         }
     } catch (e) {
         alert("Lỗi khi tạo ý tưởng thumbnail: " + e);
@@ -345,6 +410,11 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                     <span className="text-xs font-bold uppercase tracking-widest">AI Writer Studio</span>
                 </div>
                 <h2 className="text-2xl font-black text-slate-900">Thiết Lập</h2>
+                {linkedRowId && (
+                    <div className="mt-2 text-xs bg-blue-50 text-blue-600 p-2 rounded border border-blue-100 flex items-center gap-1">
+                        <RefreshCcw className="w-3 h-3" /> Đang liên kết với Planner
+                    </div>
+                )}
             </div>
             
             <div className="space-y-6 flex-1">
@@ -387,6 +457,31 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                     placeholder={videoType === 'SHORT' ? "VD: Mẹo cắt hành tây không cay mắt..." : "VD: Review chi tiết iPhone 15 sau 1 tháng..."}
                     className="w-full p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition bg-slate-50 text-slate-800 min-h-[120px] resize-none shadow-inner"
                 />
+
+                {/* NEW: YOUTUBE URL INPUT */}
+                <div className="mt-4">
+                   <label className="block text-xs font-bold text-slate-500 mb-1.5 flex items-center gap-1">
+                      <Link className="w-3 h-3"/> Nguồn tham khảo (Tùy chọn)
+                   </label>
+                   <div className="relative">
+                       <input 
+                          type="text" 
+                          value={refVideoUrl}
+                          onChange={(e) => setRefVideoUrl(e.target.value)}
+                          placeholder="Paste YouTube URL here..."
+                          className="w-full pl-9 pr-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-500 outline-none bg-white"
+                       />
+                       <div className="absolute left-3 top-3 text-slate-400">
+                           <Youtube className="w-4 h-4" />
+                       </div>
+                       {getYoutubeId(refVideoUrl) && (
+                           <div className="absolute right-3 top-2.5 text-green-500" title="Valid Video ID">
+                               <Check className="w-4 h-4" />
+                           </div>
+                       )}
+                   </div>
+                   <p className="text-[10px] text-slate-400 mt-1">Dán link video để AI phân tích và tạo nội dung liên quan/remix.</p>
+                </div>
 
                 {/* TREND RESULTS UI */}
                 {showTrends && (
@@ -509,7 +604,7 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                     </div>
                     <div className="flex gap-2">
                         <button 
-                             onClick={handleSaveCurrentWork}
+                             onClick={() => handleSaveCurrentWork()}
                              className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition text-xs font-bold flex items-center gap-2"
                         >
                             {isSaving ? <Loader2 className="w-3 h-3 animate-spin"/> : <Save className="w-3 h-3" />} <span className="hidden md:inline">Save</span>
@@ -522,8 +617,8 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                              }`}
                         >
                             {pushStatus === 'PUSHING' ? <Loader2 className="w-3 h-3 animate-spin"/> : 
-                             pushStatus === 'SUCCESS' ? <Database className="w-3 h-3" /> : <Database className="w-3 h-3" />} 
-                            {pushStatus === 'SUCCESS' ? 'Đã Thêm' : 'Add to Plan'}
+                             pushStatus === 'SUCCESS' ? <Check className="w-3 h-3" /> : <Database className="w-3 h-3" />} 
+                            {pushStatus === 'SUCCESS' ? 'Đã Cập Nhật' : linkedRowId ? 'Update Plan' : 'Add to Plan'}
                         </button>
                         <button 
                              onClick={handleDownload}
@@ -655,10 +750,13 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                                         {thumbPrompts.map((p, idx) => (
                                             <div 
                                                 key={idx} 
-                                                onClick={() => setActiveThumbPrompt(p)}
-                                                className={`p-3 rounded-xl border cursor-pointer text-xs leading-relaxed transition hover:border-pink-400 ${activeThumbPrompt === p ? 'bg-pink-50 border-pink-500 text-pink-900 ring-1 ring-pink-500' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
+                                                onClick={() => {
+                                                    setActiveThumbPrompt(p);
+                                                    setSelectedPromptIndex(idx);
+                                                }}
+                                                className={`p-3 rounded-xl border cursor-pointer text-xs leading-relaxed transition hover:border-pink-400 ${selectedPromptIndex === idx ? 'bg-pink-50 border-pink-500 text-pink-900 ring-1 ring-pink-500' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
                                             >
-                                                {p.substring(0, 120)}...
+                                                {p.length > 120 ? `${p.substring(0, 120)}...` : p}
                                             </div>
                                         ))}
                                     </div>
@@ -670,7 +768,15 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                                         <label className="block text-xs font-bold text-slate-500 mb-2">Image Prompt (English)</label>
                                         <textarea
                                             value={activeThumbPrompt}
-                                            onChange={(e) => setActiveThumbPrompt(e.target.value)}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                setActiveThumbPrompt(val);
+                                                if (selectedPromptIndex !== null && thumbPrompts[selectedPromptIndex] !== undefined) {
+                                                    const newPrompts = [...thumbPrompts];
+                                                    newPrompts[selectedPromptIndex] = val;
+                                                    setThumbPrompts(newPrompts);
+                                                }
+                                            }}
                                             placeholder="Describe the image you want to generate..."
                                             className="w-full h-24 p-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-pink-500 outline-none font-mono text-sm"
                                         />
