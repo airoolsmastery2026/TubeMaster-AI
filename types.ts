@@ -72,6 +72,14 @@ export interface SavedScript {
   lastModified: string;
 }
 
+// NEW: Interface cho Video Viral tìm được
+export interface ViralVideo {
+  title: string;
+  url: string;
+  views?: string;
+  reason?: string; // Tại sao nó viral
+}
+
 export type RowStatus = 'PENDING' | 'PROCESSING' | 'OPTIMIZED' | 'SCRIPT_READY' | 'UPLOADING' | 'PUBLISHED' | 'ERROR';
 
 export interface SheetRow {

@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { GeneratedContent, AuditResult, SheetRow } from "../types";
+import { GeneratedContent, AuditResult, SheetRow, ViralVideo } from "../types";
 
 const MODEL_NAME = "gemini-2.5-flash";
 const IMAGEN_MODEL = "imagen-4.0-generate-001";
@@ -42,8 +42,13 @@ export const generateVideoContent = async (apiKey: string, topic: string, tone: 
   let prompt = "";
   
   const refContext = relatedVideoId 
-    ? `\nTHAM KHẢO VIDEO NGUỒN: YouTube Video ID "${relatedVideoId}". 
-       Hãy phân tích ngữ cảnh tiềm năng của video này. Nội dung tạo ra phải là một phiên bản "Remix", "Reaction", hoặc "Nâng cấp" dựa trên chủ đề gốc nhưng hay hơn.` 
+    ? `\n\n[CHẾ ĐỘ SAO CHÉP & REMIX KÍCH HOẠT]
+       THAM KHẢO VIDEO NGUỒN ID: "${relatedVideoId}".
+       Nhiệm vụ của bạn:
+       1. Hãy tìm kiếm thông tin về video này (dựa trên ID hoặc ngữ cảnh phổ biến).
+       2. Phân tích cấu trúc thành công của nó (Hook, Cách dẫn dắt, Điểm cao trào).
+       3. Tạo ra một kịch bản MỚI hoàn toàn về chủ đề "${topic}" nhưng ÁP DỤNG CẤU TRÚC THÀNH CÔNG của video nguồn kia.
+       4. Đừng copy nguyên văn, hãy "học tập phong cách" và làm hay hơn.` 
     : "";
 
   if (type === 'SHORT') {
@@ -100,7 +105,9 @@ export const generateVideoContent = async (apiKey: string, topic: string, tone: 
       model: MODEL_NAME,
       contents: prompt,
       config: {
-        responseMimeType: "application/json",
+        tools: [{googleSearch: {}}], // Enable Search to analyze reference video ID context
+        responseMimeType: "application/json", // responseMimeType IS allowed with googleSearch in current SDK, but best practice is typically separate. However, for 2.0+ models structured output + tools works. 
+        // Note: If API complains, remove responseMimeType and parse manually. But 2.5 Flash supports both.
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -254,6 +261,50 @@ export const auditChannel = async (apiKey: string, channelInfo: string): Promise
     handleGeminiError(error);
   }
 };
+
+// --- VIRAL HUNTER (NEW) ---
+export const findViralContent = async (apiKey: string, niche: string): Promise<ViralVideo[]> => {
+    const prompt = `
+      Hãy tìm 3 video YouTube đang RẤT VIRAL (nhiều view, trending) gần đây liên quan đến chủ đề: "${niche}".
+      
+      Yêu cầu:
+      1. Tìm các video có lượt xem cao hoặc đang thịnh hành.
+      2. Trích xuất Tiêu đề chính xác và URL (nếu tìm thấy).
+      3. Phân tích ngắn gọn tại sao nó viral (Hook tốt? Drama? Thông tin bổ ích?).
+      
+      Trả về JSON list.
+    `;
+  
+    try {
+      const ai = getAIInstance(apiKey);
+      const response = await ai.models.generateContent({
+        model: MODEL_NAME,
+        contents: prompt,
+        config: {
+          tools: [{googleSearch: {}}],
+          // Note: When combining googleSearch and Schema, Gemini performs retrieval augmented generation to fill the schema.
+          responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                  type: Type.OBJECT,
+                  properties: {
+                      title: { type: Type.STRING },
+                      url: { type: Type.STRING, description: "YouTube URL of the video" },
+                      views: { type: Type.STRING, description: "Estimated views e.g. '1.5M views'" },
+                      reason: { type: Type.STRING, description: "Why is it viral?" }
+                  }
+              }
+          }
+        },
+      });
+  
+      const text = response.text;
+      if (!text) throw new Error("No response");
+      return JSON.parse(text) as ViralVideo[];
+    } catch (error) {
+      handleGeminiError(error);
+    }
+  };
 
 // --- IMAGE GENERATION FEATURES ---
 

@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { GeneratedContent, ChannelProfile, SavedScript, SheetRow } from '../types';
-import { generateVideoContent, generateOptimizedDescription, generateThumbnailIdeas, generateThumbnailImage, generateSocialPosts, getTrendingIdeas } from '../services/geminiService';
-import { Sparkles, Copy, Loader2, Video, FileText, Tag, Download, AlertCircle, RefreshCw, Wand2, Plus, Save, Trash2, Clock, Edit3, LayoutTemplate, Database, ArrowRight, Image as ImageIcon, Palette, Share2, Facebook, Linkedin, Twitter, Check, Search, ExternalLink, RefreshCcw, Youtube, Link } from 'lucide-react';
+import { GeneratedContent, ChannelProfile, SavedScript, SheetRow, ViralVideo } from '../types';
+import { generateVideoContent, generateOptimizedDescription, generateThumbnailIdeas, generateThumbnailImage, generateSocialPosts, getTrendingIdeas, findViralContent } from '../services/geminiService';
+import { Sparkles, Copy, Loader2, Video, FileText, Tag, Download, AlertCircle, RefreshCw, Wand2, Plus, Save, Trash2, Clock, Edit3, LayoutTemplate, Database, ArrowRight, Image as ImageIcon, Palette, Share2, Facebook, Linkedin, Twitter, Check, Search, ExternalLink, RefreshCcw, Youtube, Link, Eye, Flame, ScanEye } from 'lucide-react';
 
 interface ContentGeneratorProps {
   activeProfile?: ChannelProfile;
@@ -15,6 +15,7 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
   const [refVideoUrl, setRefVideoUrl] = useState(''); // New: Youtube URL input
   const [tone, setTone] = useState(activeProfile?.defaultTone || 'Hài hước & Năng động');
   const [videoType, setVideoType] = useState<'LONG' | 'SHORT'>('LONG');
+  const [mode, setMode] = useState<'CREATOR' | 'VIRAL_HUNTER'>('CREATOR'); // New Mode Switch
   
   // --- PROCESS STATE ---
   const [isLoading, setIsLoading] = useState(false);
@@ -42,6 +43,10 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
   const [trendIdeas, setTrendIdeas] = useState<string[]>([]);
   const [trendSources, setTrendSources] = useState<{title: string, uri: string}[]>([]);
   const [showTrends, setShowTrends] = useState(false);
+  
+  // --- VIRAL VIDEO HUNTER STATE (NEW) ---
+  const [viralVideos, setViralVideos] = useState<ViralVideo[]>([]);
+  const [isHuntingViral, setIsHuntingViral] = useState(false);
 
   // --- COPY STATE ---
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -256,6 +261,7 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
       setError(null);
       setPushStatus('IDLE');
       setLinkedRowId(null); // Reset link
+      setViralVideos([]);
   };
 
   const handleDeleteScript = (id: string, e: React.MouseEvent) => {
@@ -354,6 +360,31 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
       }
   };
 
+  // --- VIRAL HUNTER FUNCTIONS (NEW) ---
+  const handleScanViral = async () => {
+     if (!topic || !activeProfile?.geminiApiKey) {
+         setError("Vui lòng nhập chủ đề ngách cần săn video.");
+         return;
+     }
+     setIsHuntingViral(true);
+     setViralVideos([]);
+     try {
+         const videos = await findViralContent(activeProfile.geminiApiKey, topic);
+         setViralVideos(videos);
+     } catch (e: any) {
+         setError("Lỗi quét viral video: " + e.message);
+     } finally {
+         setIsHuntingViral(false);
+     }
+  };
+
+  const handleRemixVideo = (video: ViralVideo) => {
+      setRefVideoUrl(video.url);
+      setTopic(`Remix: ${video.title}`);
+      setMode('CREATOR'); // Switch back to Creator mode
+      setError(null);
+  };
+
   return (
     <div className="h-full flex flex-col md:flex-row bg-slate-50 overflow-hidden">
       
@@ -404,12 +435,24 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
       {/* COL 2: CONFIG PANEL */}
       {!activeScript && (
         <div className="w-full md:w-80 bg-white border-r border-slate-200 flex flex-col h-full overflow-y-auto p-6 animate-fade-in custom-scrollbar">
-            <div className="mb-8">
-                <div className="flex items-center gap-2 mb-1 text-indigo-600">
-                    <Wand2 className="w-5 h-5" />
-                    <span className="text-xs font-bold uppercase tracking-widest">AI Writer Studio</span>
-                </div>
-                <h2 className="text-2xl font-black text-slate-900">Thiết Lập</h2>
+            {/* MODE SWITCHER */}
+            <div className="mb-6 p-1 bg-slate-100 rounded-lg flex">
+                <button 
+                    onClick={() => setMode('CREATOR')}
+                    className={`flex-1 py-2 text-xs font-bold rounded-md flex items-center justify-center gap-2 transition ${mode === 'CREATOR' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                    <Wand2 className="w-3 h-3" /> Creator
+                </button>
+                <button 
+                    onClick={() => setMode('VIRAL_HUNTER')}
+                    className={`flex-1 py-2 text-xs font-bold rounded-md flex items-center justify-center gap-2 transition ${mode === 'VIRAL_HUNTER' ? 'bg-white text-pink-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                    <ScanEye className="w-3 h-3" /> Viral Hunter
+                </button>
+            </div>
+
+            <div className="mb-4">
+                <h2 className="text-2xl font-black text-slate-900">{mode === 'VIRAL_HUNTER' ? 'Săn Video Viral' : 'Thiết Lập'}</h2>
                 {linkedRowId && (
                     <div className="mt-2 text-xs bg-blue-50 text-blue-600 p-2 rounded border border-blue-100 flex items-center gap-1">
                         <RefreshCcw className="w-3 h-3" /> Đang liên kết với Planner
@@ -418,6 +461,9 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
             </div>
             
             <div className="space-y-6 flex-1">
+            
+            {/* VIDEO TYPE - Creator Only */}
+            {mode === 'CREATOR' && (
             <div>
                 <label className="block text-sm font-bold text-slate-700 mb-2">Loại Video</label>
                 <div className="grid grid-cols-2 gap-3">
@@ -437,28 +483,80 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                     </button>
                 </div>
             </div>
+            )}
 
             <div>
                 <div className="flex justify-between items-center mb-2">
-                    <label className="block text-sm font-bold text-slate-700">Chủ đề / Ý tưởng</label>
-                    <button 
-                        onClick={handleHuntTrends}
-                        disabled={isHunting}
-                        className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 transition"
-                    >
-                        {isHunting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-                        Săn Trend Google
-                    </button>
+                    <label className="block text-sm font-bold text-slate-700">
+                        {mode === 'VIRAL_HUNTER' ? 'Ngách Chủ Đề Cần Săn' : 'Chủ đề / Ý tưởng'}
+                    </label>
+                    {mode === 'CREATOR' && (
+                        <button 
+                            onClick={handleHuntTrends}
+                            disabled={isHunting}
+                            className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 transition"
+                        >
+                            {isHunting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
+                            Gợi ý Trend
+                        </button>
+                    )}
                 </div>
                 
                 <textarea
                     value={topic}
                     onChange={(e) => setTopic(e.target.value)}
-                    placeholder={videoType === 'SHORT' ? "VD: Mẹo cắt hành tây không cay mắt..." : "VD: Review chi tiết iPhone 15 sau 1 tháng..."}
-                    className="w-full p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition bg-slate-50 text-slate-800 min-h-[120px] resize-none shadow-inner"
+                    placeholder={mode === 'VIRAL_HUNTER' ? "Nhập ngách để tìm video (VD: Tài chính cá nhân, Review đồ công nghệ...)" : (videoType === 'SHORT' ? "VD: Mẹo cắt hành tây không cay mắt..." : "VD: Review chi tiết iPhone 15 sau 1 tháng...")}
+                    className="w-full p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition bg-slate-50 text-slate-800 min-h-[100px] resize-none shadow-inner"
                 />
 
-                {/* NEW: YOUTUBE URL INPUT */}
+                {/* VIRAL HUNTER ACTIONS */}
+                {mode === 'VIRAL_HUNTER' && (
+                    <div className="mt-3">
+                        <button 
+                            onClick={handleScanViral}
+                            disabled={isHuntingViral || !topic}
+                            className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-lg"
+                        >
+                             {isHuntingViral ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScanEye className="w-4 h-4" />}
+                             Quét Viral Content
+                        </button>
+
+                        {viralVideos.length > 0 && (
+                            <div className="mt-4 space-y-3">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Kết quả tìm kiếm</p>
+                                {viralVideos.map((video, idx) => (
+                                    <div key={idx} className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition hover:border-pink-300 group">
+                                        <div className="flex gap-2 items-start mb-2">
+                                            <div className="w-8 h-8 bg-red-100 text-red-600 rounded-lg flex items-center justify-center shrink-0">
+                                                <Youtube className="w-4 h-4" />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <a href={video.url} target="_blank" rel="noreferrer" className="font-bold text-xs text-slate-800 leading-tight hover:text-pink-600 line-clamp-2 block">
+                                                    {video.title}
+                                                </a>
+                                                <div className="flex gap-2 mt-1">
+                                                    {video.views && <span className="text-[9px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 flex items-center gap-1"><Eye className="w-2 h-2"/> {video.views}</span>}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="bg-slate-50 p-2 rounded text-[10px] text-slate-600 italic mb-2 border border-slate-100">
+                                            "{video.reason || 'Trending content'}"
+                                        </div>
+                                        <button 
+                                            onClick={() => handleRemixVideo(video)}
+                                            className="w-full py-1.5 bg-pink-50 text-pink-600 border border-pink-200 hover:bg-pink-100 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1"
+                                        >
+                                            <Sparkles className="w-3 h-3" /> Sao Chép & Remix
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* REFERENCE URL INPUT - Creator Only */}
+                {mode === 'CREATOR' && (
                 <div className="mt-4">
                    <label className="block text-xs font-bold text-slate-500 mb-1.5 flex items-center gap-1">
                       <Link className="w-3 h-3"/> Nguồn tham khảo (Tùy chọn)
@@ -468,23 +566,28 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                           type="text" 
                           value={refVideoUrl}
                           onChange={(e) => setRefVideoUrl(e.target.value)}
-                          placeholder="Paste YouTube URL here..."
-                          className="w-full pl-9 pr-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-500 outline-none bg-white"
+                          placeholder="Dán link YouTube..."
+                          className={`w-full pl-9 pr-3 py-2.5 text-sm border rounded-lg outline-none transition ${refVideoUrl ? 'bg-pink-50 border-pink-300 ring-1 ring-pink-200' : 'bg-white border-slate-200 focus:ring-2 focus:ring-red-500'}`}
                        />
                        <div className="absolute left-3 top-3 text-slate-400">
-                           <Youtube className="w-4 h-4" />
+                           <Youtube className={`w-4 h-4 ${refVideoUrl ? 'text-red-500' : ''}`} />
                        </div>
                        {getYoutubeId(refVideoUrl) && (
-                           <div className="absolute right-3 top-2.5 text-green-500" title="Valid Video ID">
+                           <div className="absolute right-3 top-2.5 text-green-500 animate-pulse" title="Valid Video ID">
                                <Check className="w-4 h-4" />
                            </div>
                        )}
                    </div>
-                   <p className="text-[10px] text-slate-400 mt-1">Dán link video để AI phân tích và tạo nội dung liên quan/remix.</p>
+                   {getYoutubeId(refVideoUrl) ? (
+                       <p className="text-[10px] text-pink-600 mt-1 font-bold flex items-center gap-1"><Flame className="w-3 h-3"/> Chế độ Remix đang kích hoạt!</p>
+                   ) : (
+                       <p className="text-[10px] text-slate-400 mt-1">Dán link video để AI phân tích và tạo nội dung remix.</p>
+                   )}
                 </div>
+                )}
 
-                {/* TREND RESULTS UI */}
-                {showTrends && (
+                {/* TREND RESULTS UI (STANDARD) - Creator Only */}
+                {showTrends && mode === 'CREATOR' && (
                     <div className="mt-3 bg-orange-50 border border-orange-100 rounded-xl p-3 animate-fade-in">
                         <div className="flex justify-between items-center mb-2">
                             <span className="text-[10px] font-bold text-orange-600 uppercase flex items-center gap-1">
@@ -525,6 +628,8 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                 )}
             </div>
 
+            {/* TONE - Creator Only */}
+            {mode === 'CREATOR' && (
             <div>
                 <label className="block text-sm font-bold text-slate-700 mb-2">Phong cách</label>
                 <div className="relative">
@@ -541,6 +646,7 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                     <div className="absolute right-4 top-4 pointer-events-none text-slate-400">▼</div>
                 </div>
             </div>
+            )}
 
             {error && (
                 <div className="p-4 bg-red-50 border border-red-100 rounded-xl flex items-start gap-3 text-red-700">
@@ -549,14 +655,21 @@ const ContentGenerator: React.FC<ContentGeneratorProps> = ({ activeProfile, init
                 </div>
             )}
 
+            {/* MAIN GENERATE BUTTON - Creator Only */}
+            {mode === 'CREATOR' && (
             <button
                 onClick={handleGenerate}
                 disabled={isLoading || !topic}
-                className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-bold hover:from-indigo-700 hover:to-purple-700 transition flex items-center justify-center gap-2 disabled:opacity-50 shadow-xl shadow-indigo-200 transform hover:-translate-y-0.5"
+                className={`w-full py-4 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 disabled:opacity-50 shadow-xl transform hover:-translate-y-0.5 ${
+                    refVideoUrl 
+                    ? 'bg-gradient-to-r from-pink-600 to-red-600 hover:from-pink-700 hover:to-red-700 shadow-pink-200' 
+                    : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-indigo-200'
+                }`}
             >
                 {isLoading ? <Loader2 className="animate-spin w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
-                {isLoading ? 'AI Đang Viết...' : 'Tạo Nội Dung Ngay'}
+                {isLoading ? 'AI Đang Viết...' : refVideoUrl ? 'Phân Tích & Remix Ngay' : 'Tạo Nội Dung Ngay'}
             </button>
+            )}
             </div>
         </div>
       )}
